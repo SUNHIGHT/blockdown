@@ -25,12 +25,12 @@ class TetrisGame:
         # self.screen = pygame.display.set_mode((self.COLS * self.BLOCK_SIZE, self.ROWS * self.BLOCK_SIZE))  # この行は削除またはコメントアウト
         self.clock = pygame.time.Clock()
         # BGMとSEのロード
-        self.bgm_path = '/Users/takanishi/ChatGPT/tetris/music/sample_music.mp3'
-        self.collision_se_path = '/Users/takanishi/ChatGPT/tetris/SE/collision_SE.mp3'
-        self.vanish_se_path = '/Users/takanishi/ChatGPT/tetris/SE/vanish_SE.mp3'
-        pygame.mixer.music.load(self.bgm_path)
-        self.collision_sound = pygame.mixer.Sound(self.collision_se_path)
-        self.vanish_sound = pygame.mixer.Sound(self.vanish_se_path)
+        # self.bgm_path = '/Users/takanishi/ChatGPT/tetris/music/sample_music.mp3'
+        # self.collision_se_path = '/Users/takanishi/ChatGPT/tetris/SE/collision_SE.mp3'
+        # self.vanish_se_path = '/Users/takanishi/ChatGPT/tetris/SE/vanish_SE.mp3'
+        # pygame.mixer.music.load(self.bgm_path)
+        # self.collision_sound = pygame.mixer.Sound(self.collision_se_path)
+        # self.vanish_sound = pygame.mixer.Sound(self.vanish_se_path)
 
         # 効果音の音量を最大に設定
         self.collision_sound.set_volume(1.0)  # pygameでは1.0が最大音量
