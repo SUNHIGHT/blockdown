@@ -27,6 +27,7 @@
   --sun:#F2B33D; --sun-soft:#3A2E10; --bad:#F0736B; --bad-soft:#3B1B19;
   --p:#6EA5F0; --f:#F2B33D; --c:#3FD39B; color-scheme:dark}
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{background:var(--bg);color:var(--fg);font:15px/1.6 var(--font);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0 150px;-webkit-text-size-adjust:100%}
 .wrap{max-width:600px;margin:0 auto}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -136,6 +137,16 @@ svg{display:block;max-width:100%;height:auto}
 .empty{padding:18px 0;text-align:center;color:var(--muted);font-size:13.5px}
 .tag{display:inline-block;font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;background:var(--surface2);color:var(--muted)}
 .tag.ok{background:var(--accent-soft);color:var(--accent)} .tag.warn{background:var(--sun-soft);color:var(--sun)} .tag.bad{background:var(--bad-soft);color:var(--bad)}
+.fab{position:fixed;right:max(16px,env(safe-area-inset-right,0px));bottom:calc(76px + env(safe-area-inset-bottom,0px));z-index:6;height:56px;padding:0 22px;border-radius:28px;border:0;background:var(--accent);color:var(--accent-fg);font-weight:900;font-size:16px;box-shadow:0 6px 18px rgba(0,0,0,.28)}
+body.tm .fab{bottom:calc(140px + env(safe-area-inset-bottom,0px))}
+.scrim{position:fixed;inset:0;z-index:20;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center}
+.sheet{background:var(--bg);width:100%;max-width:600px;max-height:92%;overflow:auto;border-radius:20px 20px 0 0;padding:16px max(16px,env(safe-area-inset-left,0px)) calc(20px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px}
+.thumb{width:100%;max-height:220px;object-fit:cover;border-radius:12px}
+.ai-item{display:grid;grid-template-columns:1fr auto;gap:4px 8px;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.ai-item:first-child{border-top:0}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:sp .8s linear infinite;vertical-align:-2px;margin-right:8px}
+@keyframes sp{to{transform:rotate(360deg)}}
+.rev{white-space:pre-wrap;font-size:14.5px;line-height:1.75}
 @media (prefers-reduced-motion:no-preference){.trk i{transition:width .3s}}
 </style>
 
@@ -145,6 +156,8 @@ svg{display:block;max-width:100%;height:auto}
 </div>
 <div class="timer" id="timer" hidden></div>
 <nav class="nav" id="nav"></nav>
+<button class="fab" id="fab" data-act="aiopen" hidden>AIで記録</button>
+<div class="scrim" id="scrim" hidden></div>
 
 <script>
 (()=>{
@@ -155,9 +168,50 @@ const DEF={settings:{age:25,height:168,weight:62,pal:1.55,phase:'bulk',protein:1
 let S=null;
 try{const r=localStorage.getItem(KEY);if(r)S=JSON.parse(r)}catch(e){}
 S=S||JSON.parse(JSON.stringify(DEF));
-S.settings=Object.assign({},DEF.settings,S.settings||{});S.days=S.days||{};S.foods=S.foods||[];
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}};
-const ui={tab:'home',date:null,sess:null,slot:null,confirm:false,msg:''};
+S.settings=Object.assign({},DEF.settings,S.settings||{});S.days=S.days||{};S.foods=S.foods||[];S.reviews=S.reviews||{};
+/* cloud sync (db capability): one doc per day + one profile doc. localStorage stays as the local cache. */
+let DB=null,flushT=null,flushing=false,setHash=null;const synced={};
+const dk=k=>'d'+k.replace(/-/g,'');
+const kd=id=>id.slice(1,5)+'-'+id.slice(5,7)+'-'+id.slice(7,9);
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}if(DB){clearTimeout(flushT);flushT=setTimeout(flush,900)}};
+async function flush(){
+  if(!DB)return;if(flushing){flushT=setTimeout(flush,900);return}
+  flushing=true;
+  try{
+    const sj=JSON.stringify({settings:S.settings,foods:S.foods,reviews:S.reviews});
+    if(sj!==setHash){await DB.doc('genki/profile').set(JSON.parse(sj));setHash=sj}
+    for(const k of Object.keys(S.days)){
+      const j=JSON.stringify(S.days[k]);
+      if(synced[k]===j)continue;
+      if(j==='{}'){synced[k]=j;continue}
+      await DB.doc('days/'+dk(k)).set(JSON.parse(j));synced[k]=j;
+    }
+    ui.sync='on';
+  }catch(e){ui.sync='error'}
+  flushing=false;
+}
+async function connect(){
+  try{
+    if(!(window.claude&&claude.use))return;
+    const db=await claude.use('db');if(!db)return;
+    const pr=await db.doc('genki/profile').get();
+    if(pr.exists){const o=pr.data();S.settings=Object.assign({},DEF.settings,o.settings||{});S.foods=o.foods||[];S.reviews=o.reviews||{};setHash=JSON.stringify({settings:S.settings,foods:S.foods,reviews:S.reviews})}
+    DB=db;ui.sync='on';
+    db.collection('days').onSnapshot(snap=>{
+      let ch=false;
+      snap.docs.forEach(d=>{
+        if(!d.exists)return;const k=kd(d.id),j=JSON.stringify(d.data());
+        const localJ=JSON.stringify(S.days[k]||{});
+        if(synced[k]===undefined||localJ===synced[k]){if(localJ!==j){S.days[k]=JSON.parse(j);ch=true}synced[k]=j}
+      });
+      if(ch){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){}if(!/INPUT|TEXTAREA|SELECT/.test((document.activeElement||{}).tagName||'')&&!ai.open)render(true)}
+      flush();
+    },()=>{ui.sync='error'});
+    flush();
+  }catch(e){ui.sync='off'}
+}
+const ai={open:false,busy:false,err:'',res:null,photo:null,prev:'',text:''};
+const ui={sync:'off',tab:'home',date:null,sess:null,slot:null,confirm:false,msg:''};
 try{ui.tab=localStorage.getItem('genki.tab')||'home'}catch(e){}
 
 /* ---------- utils ---------- */
@@ -375,6 +429,7 @@ V.home=()=>{
     <div class="tip ${tips[0][0]}" style="margin-top:14px">${tips[0][1]}</div>
   </div>
 
+  ${(!d.sleep&&k===TODAY&&new Date().getHours()<14)?`<div class="card flat"><div class="row sb"><div><b>おはようございます</b><div class="small muted">いま起きた時刻で睡眠を記録します（就寝は前回と同じ）</div></div><button class="btn pri sm" data-act="wake">起きた</button></div></div>`:''}
   <div class="card">
     <h2>今日のトレーニング</h2>
     ${wo?`<div class="row sb"><div><h3>${wo.n}</h3><div class="small muted">${wo.sub}</div></div><span class="tag ${sc.pp.done>=sc.pp.total&&sc.pp.total?'ok':''} num">${sc.pp.done}/${sc.pp.total}</span></div>
@@ -400,6 +455,11 @@ V.home=()=>{
     ${[['energy','エネルギー','低い→高い'],['mood','気分','低い→高い'],['fatigue','疲労・筋肉痛','なし→強い']].map(([key,nm,hint])=>`
       <div style="margin-top:10px"><div class="row sb small"><b>${nm}</b><span class="muted">${hint}</span></div>
       <div class="scale" style="margin-top:6px">${[1,2,3,4,5].map(i=>`<button class="${d[key]===i?'on':''}" data-act="rate" data-a="${key}" data-b="${i}" aria-label="${nm} ${i}">${i}</button>`).join('')}</div></div>`).join('')}
+  </div>
+  <div class="card">
+    <div class="row sb"><h2 style="margin:0">今週のふりかえり</h2><button class="btn sm" data-act="review" ${ai.busy?'disabled':''}>${ai.busy==='rev'?'作成中…':'AIに聞く'}</button></div>
+    ${(S.reviews[ymd(weekStart(k))]||{}).text?`<p class="rev" style="margin-top:10px">${esc(S.reviews[ymd(weekStart(k))].text)}</p>`:`<p class="small muted" style="margin-top:8px">この週の睡眠・食事・体重・セット数をまとめて、来週の調整案を出します。</p>`}
+    ${ai.err&&ai.busy===false&&ai.errIn==='rev'?`<p class="small" style="color:var(--bad);margin-top:8px">${esc(ai.err)}</p>`:''}
   </div>`;
 };
 
@@ -574,6 +634,7 @@ V.settings=()=>{
     ${num('protein','たんぱく質 g/kg','0.1')}${num('fatPct','脂質 エネルギー比 %')}${num('sleep','睡眠目標 時間','0.25')}${num('water','水分 ml/kg')}${num('rest','レスト秒')}</div>
     <div class="tip" style="margin-top:14px">現在の目標: <b class="num">${T.kcal}kcal</b>（推定維持 ${T.tdee}kcal）　P${T.p}g　F${T.f}g　C${T.c}g<br><span class="small muted">変更は自動で保存されます。「今日」へ戻ると反映されます。</span></div>
   </div>
+  <div class="card"><h2>クラウド同期</h2><p class="small">${ui.sync==='on'?'<span class="tag ok">オン</span>　記録はクラウドにも保存され、同じアカウントのiPhone・Androidで共有されます。':ui.sync==='error'?'<span class="tag bad">エラー</span>　保存に失敗しました。通信状態を確認してください。':'<span class="tag">オフ</span>　この端末だけに保存されています（Claudeアプリの外で開いている場合など）。'}</p></div>
   <div class="card"><h2>データの保存</h2>
     <p class="small muted" style="margin-bottom:10px">データはこの端末のブラウザ内にだけ保存されます。機種変更や消去に備えて、ときどき下の文字列をコピーしてメモ帳などに残してください。</p>
     <textarea id="exp" readonly>${esc(JSON.stringify(S))}</textarea>
@@ -600,6 +661,7 @@ function render(keepScroll){
     <button class="ib" data-act="tab" data-a="settings" aria-label="設定">⚙</button>`;
   $('#nav').innerHTML=TABS.map(([id,l])=>`<button class="${ui.tab===id?'on':''}" data-act="tab" data-a="${id}">${l}</button>`).join('');
   $('#app').innerHTML=V[ui.tab]();
+  $('#fab').hidden=ui.tab==='settings';
   if(keepScroll)window.scrollTo(0,y);
   updateTimer();
 }
@@ -611,6 +673,7 @@ function startRest(sec){rt={end:Date.now()+sec*1000,total:sec,fired:false};updat
 function beep(){try{const A=window.AudioContext||window.webkitAudioContext,a=new A(),o=a.createOscillator(),g=a.createGain();o.frequency.value=880;g.gain.value=.08;o.connect(g);g.connect(a.destination);o.start();setTimeout(()=>{o.stop();a.close()},350)}catch(e){}}
 function updateTimer(){
   const el=$('#timer');
+  document.body.classList.toggle('tm',!!rt);
   if(!rt){el.hidden=true;return}
   const left=Math.ceil((rt.end-Date.now())/1000);
   if(left<=0){
@@ -629,7 +692,133 @@ function updateTimer(){
 setInterval(()=>{if(rt){if(rt.fired)$('#timer').dataset.mode='done';updateTimer()}},250);
 
 /* ---------- actions ---------- */
+/* ---------- AI input ---------- */
+const EXLIST=Object.values(EXMAP).map(e=>e.id+'='+e.n).join(' / ');
+async function shrink(file){
+  const url=URL.createObjectURL(file);
+  const img=await new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=url});
+  const sc=Math.min(1,1280/Math.max(img.width,img.height)),c=document.createElement('canvas');
+  c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);c.getContext('2d').drawImage(img,0,0,c.width,c.height);
+  URL.revokeObjectURL(url);
+  const blob=await new Promise(r=>c.toBlob(r,'image/jpeg',.85));
+  return {blob,prev:c.toDataURL('image/jpeg',.5)};
+}
+function parseJSON(t){const m=String(t).match(/\{[\s\S]*\}/);if(!m)throw new Error('parse');return JSON.parse(m[0])}
+const aiErr=e=>e&&e.code==='not_granted'?'AIの利用が許可されていません。Claudeアプリで開き、表示された許可を承認してください。':e&&e.code==='rate_limited'?'短時間に使いすぎました。少し待ってからやり直してください。':e&&e.code==='images_unavailable'?'この環境では写真を送れません。文字で入力してください。':'うまく読み取れませんでした。もう一度、内容を具体的に書くか写真を撮り直してください。';
+async function aiRun(){
+  const text=($('#aitext')||{}).value||ai.text||'';ai.text=text;
+  if(!text.trim()&&!ai.photo){ai.err='写真か文章を入れてください。';renderAI();return}
+  ai.busy=true;ai.err='';ai.res=null;renderAI();
+  try{
+    const sample=await claude.use('sample');if(!sample)throw {code:'not_granted'};
+    const h=new Date().getHours();
+    const prompt=`あなたは日本のスポーツ栄養士兼トレーニング記録係です。ユーザーの入力（写真と文章）から記録すべき内容を抽出し、次の形式のJSONだけを出力してください。説明文やコードフェンスは出力しません。
+{"food":[{"n":"料理名","p":たんぱく質g,"f":脂質g,"c":炭水化物g,"slot":"朝|昼|夜|間食|トレ前|トレ後"}],"water_ml":数値|null,"weight":kg|null,"waist":cm|null,"shoulder":cm|null,"sleep":{"bed":"HH:MM","wake":"HH:MM","q":1-5|null}|null,"energy":1-5|null,"mood":1-5|null,"fatigue":1-5|null,"workout":[{"id":"種目ID","sets":[{"w":kg,"r":回数,"rir":0-3|null}]}],"note":"推定の前提や確認してほしい点を1文で"}
+規則:
+- 食事の写真は、皿ごとに1品ずつ分け、一般的な日本の量で推定する。p,f,cは1品の合計グラム。ごはん茶碗1杯は約150g。見えない調味料や油は常識的に含める。
+- 文章の食事は、量の指定があればそれに従う。指定がなければ一般的な1人前。
+- 数値は必ず数値型。不明な項目は null か空配列にする。入力にない項目を作らない。
+- slotは文章で指定がなければ現在${h}時から推定する。
+- 筋トレは次の種目IDに対応づける。対応できない種目は workout に入れず note に書く。同じ重量・回数の複数セットは sets に必要な数だけ並べる。
+種目ID: ${EXLIST}
+ユーザーの文章: ${text||'（なし）'}`;
+    const opt={modelTier:'default',cache:false};
+    if(ai.photo)opt.images=[ai.photo];
+    let o;
+    try{o=await sample.json(prompt,opt)}catch(e){if(e&&e.code&&e.code!=='parse_error'&&e.code!=='invalid_json')throw e;const r=await sample(prompt,opt);o=parseJSON(r.text)}
+    ai.res={food:(o.food||[]).filter(f=>f&&(f.p||f.f||f.c)).map(f=>({n:String(f.n||'食事'),p:+f.p||0,f:+f.f||0,c:+f.c||0,slot:SLOTS.includes(f.slot)?f.slot:'間食'})),
+      water:+o.water_ml||0,weight:+o.weight||0,waist:+o.waist||0,shoulder:+o.shoulder||0,sleep:(o.sleep&&o.sleep.bed&&o.sleep.wake)?o.sleep:null,
+      energy:+o.energy||0,mood:+o.mood||0,fatigue:+o.fatigue||0,
+      workout:(o.workout||[]).filter(w=>w&&EXMAP[w.id]&&Array.isArray(w.sets)&&w.sets.length),note:o.note||''};
+  }catch(e){ai.err=aiErr(e)}
+  ai.busy=false;renderAI();
+}
+function aiApply(){
+  const r=ai.res;if(!r)return;const d=D(ui.date);
+  (d.food=d.food||[]);r.food.forEach(f=>d.food.push({...f}));
+  if(r.water)d.water=(d.water||0)+r.water;
+  if(r.weight>0)d.weight=r.weight;if(r.waist>0)d.waist=r.waist;if(r.shoulder>0)d.shoulder=r.shoulder;
+  if(r.sleep)d.sleep={bed:r.sleep.bed,wake:r.sleep.wake,q:+r.sleep.q||3};
+  ['energy','mood','fatigue'].forEach(k=>{if(r[k]>=1&&r[k]<=5)d[k]=Math.round(r[k])});
+  r.workout.forEach(w=>{
+    const sn=(ui.sess&&PROG[ui.sess].ex.some(e=>e.id===w.id))?ui.sess:Object.keys(PROG).find(s=>PROG[s].ex.some(e=>e.id===w.id));
+    const wo=ensureWo(ui.date,sn);
+    wo.ex[w.id]=w.sets.map(x=>({w:x.w==null?'':+x.w,r:x.r==null?'':+x.r,rir:x.rir==null?'':String(x.rir),done:true,warm:false}));
+  });
+  save();closeAI();render(true);
+}
+function closeAI(){ai.open=false;ai.res=null;ai.err='';ai.photo=null;ai.prev='';ai.text='';$('#scrim').hidden=true}
+function renderAI(){
+  const sc=$('#scrim');sc.hidden=!ai.open;if(!ai.open)return;
+  const r=ai.res;
+  let body;
+  if(r){
+    const items=[...r.food.map((f,i)=>`<div class="ai-item"><div><b>${esc(f.n)}</b><div class="small muted num">${f.slot}　P${r1(f.p)} F${r1(f.f)} C${r1(f.c)}　${kc(f.p,f.f,f.c)}kcal</div></div><button class="x" data-act="aidel" data-a="${i}" aria-label="削除">×</button></div>`),
+      ...(r.water?[`<div class="ai-item"><div><b>水分 +${r.water}ml</b></div><span></span></div>`]:[]),
+      ...(r.weight||r.waist||r.shoulder?[`<div class="ai-item"><div><b>身体測定</b><div class="small muted num">${r.weight?'体重 '+r.weight+'kg　':''}${r.waist?'ウエスト '+r.waist+'cm　':''}${r.shoulder?'肩周り '+r.shoulder+'cm':''}</div></div><span></span></div>`]:[]),
+      ...(r.sleep?[`<div class="ai-item"><div><b>睡眠</b><div class="small muted num">${esc(r.sleep.bed)} → ${esc(r.sleep.wake)}</div></div><span></span></div>`]:[]),
+      ...(r.energy||r.mood||r.fatigue?[`<div class="ai-item"><div><b>体調</b><div class="small muted">エネルギー ${r.energy||'–'}　気分 ${r.mood||'–'}　疲労 ${r.fatigue||'–'}</div></div><span></span></div>`]:[]),
+      ...r.workout.map(w=>`<div class="ai-item"><div><b>${esc(EXMAP[w.id].n)}</b><div class="small muted num">${w.sets.map(x=>(x.w!=null?x.w+'kg×':'')+(x.r??'')).join('　')}</div></div><span></span></div>`)];
+    body=`<h3>この内容で記録します</h3>${items.length?`<div>${items.join('')}</div>`:'<div class="empty">記録できる内容が見つかりませんでした。</div>'}
+      ${r.note?`<div class="tip warn small">${esc(r.note)}</div>`:''}
+      <p class="small muted">推定値は目安です。違う場合は×で外し、あとから食事タブで直せます。</p>
+      <div class="row"><button class="btn" data-act="aiback">やり直す</button><button class="btn pri" style="flex:1" data-act="aiapply" ${items.length?'':'disabled'}>記録に追加</button></div>`;
+  }else{
+    body=`<div class="row sb"><h3>AIで記録</h3><button class="x" data-act="aiclose" aria-label="閉じる">×</button></div>
+      <p class="small muted">写真か文章で伝えるだけで、食事・水分・体重・睡眠・体調・筋トレをまとめて記録します。文章欄ではキーボードのマイクで音声入力できます。</p>
+      <label class="btn block" style="text-align:center;cursor:pointer;display:block">${ai.photo?'写真を撮り直す／選び直す':'食事の写真を撮る・選ぶ'}<input type="file" accept="image/*" id="aiph" hidden></label>
+      ${ai.prev?`<img class="thumb" src="${ai.prev}" alt="選んだ写真">`:''}
+      <textarea id="aitext" placeholder="例：昼に牛丼の大盛りと味噌汁。水500ml。スクワット70kgで8回を3セット。体重61.8、よく眠れた">${esc(ai.text)}</textarea>
+      ${ai.err?`<div class="tip bad small">${esc(ai.err)}</div>`:''}
+      <button class="btn pri block" data-act="airun" ${ai.busy?'disabled':''}>${ai.busy?'<span class="spin"></span>読み取り中':'読み取る'}</button>`;
+  }
+  sc.innerHTML=`<div class="sheet" role="dialog" aria-modal="true">${body}</div>`;
+}
+document.addEventListener('change',async e=>{
+  if(e.target.id==='aiph'&&e.target.files[0]){
+    ai.text=($('#aitext')||{}).value||ai.text;
+    try{const r=await shrink(e.target.files[0]);ai.photo=r.blob;ai.prev=r.prev;ai.err=''}catch(x){ai.err='写真を読み込めませんでした。'}
+    renderAI();
+  }
+});
+async function aiReview(){
+  ai.busy='rev';ai.err='';ai.errIn='rev';render(true);
+  try{
+    const sample=await claude.use('sample');if(!sample)throw {code:'not_granted'};
+    const k=ui.date,T=targets(),ws=weekStart(k);
+    const days=Array.from({length:7},(_,i)=>ymd(addDays(ws,i))).filter(x=>x<=TODAY);
+    const sm=days.map(x=>score(x));
+    const logged=days.filter(x=>(S.days[x]||{}).food&&S.days[x].food.length);
+    const avg=f=>logged.length?Math.round(mean(logged.map(x=>foodSum(x)[f]))):null;
+    const sl=days.map(x=>sleepMin((S.days[x]||{}).sleep)).filter(Boolean);
+    const vol=weekVolume(k);const tr=trend().filter(p=>p.k>=days[0]);
+    const en=days.map(x=>(S.days[x]||{}).energy).filter(Boolean);
+    const data={目的:S.settings.phase,目標:{kcal:T.kcal,P:T.p,F:T.f,C:T.c,睡眠h:T.sleep},食事記録日数:logged.length,平均摂取:{kcal:avg('kcal'),P:avg('p'),F:avg('f'),C:avg('c')},睡眠平均h:sl.length?r1(mean(sl)/60):null,睡眠記録日数:sl.length,体重7日平均:tr.length?{最初:r1(tr[0].ma),最後:r1(tr[tr.length-1].ma)}:null,今週のセット数:Object.fromEntries(Object.keys(vol).map(m=>[MUS[m][0]+'(週目標'+MUS[m][1]+'〜'+MUS[m][2]+')',vol[m]])),エネルギー平均:en.length?r1(mean(en)):null,元気スコア平均:Math.round(mean(sm.map(x=>x.total)))};
+    const prompt=`あなたは筋肥大とリーンバルクに詳しいコーチです。以下は利用者（身長168cm男性）の今週の記録です。記録されていない項目は「未記録」として扱い、推測で埋めないでください。
+${JSON.stringify(data)}
+
+次の構成で、日本語の平易な文章で書いてください。見出し記号や太字は使いません。
+良かった点を1つ。
+直すべき点を最大2つ。数値を根拠に挙げる。
+来週の具体的な行動を3つ。
+全体で300字以内。`;
+    const r=await sample(prompt,{modelTier:'default',cache:false});
+    S.reviews[ymd(ws)]={text:r.text.trim()};save();ai.err='';
+  }catch(e){ai.err=aiErr(e)}
+  ai.busy=false;render(true);
+}
 const A={
+  aiopen:()=>{ai.open=true;ai.res=null;renderAI()},
+  aiclose:()=>closeAI(),
+  airun:()=>aiRun(),
+  aiback:()=>{ai.res=null;renderAI()},
+  aiapply:()=>aiApply(),
+  aidel:a=>{ai.res.food.splice(+a,1);renderAI()},
+  review:()=>aiReview(),
+  wake:()=>{
+    const d=D(ui.date),prev=Object.keys(S.days).filter(x=>x<ui.date&&S.days[x].sleep).sort().pop();
+    const n=new Date();d.sleep={bed:prev?S.days[prev].sleep.bed:'23:30',wake:pad(n.getHours())+':'+pad(n.getMinutes()),q:3};save();render(true);
+  },
   tab:a=>go(a),
   day:a=>{ui.date=a==='today'?TODAY:ymd(addDays(parse(ui.date),+a));ui.sess=null;if(ui.date>TODAY)ui.date=TODAY;render();},
   water:a=>{const d=D(ui.date);d.water=Math.max(0,(d.water||0)+(+a));save();render(true)},
@@ -727,5 +916,6 @@ document.addEventListener('input',e=>{
 });
 
 render();
+connect();
 })();
 </script>
