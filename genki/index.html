@@ -429,7 +429,7 @@ V.home=()=>{
     <div class="tip ${tips[0][0]}" style="margin-top:14px">${tips[0][1]}</div>
   </div>
 
-  ${(!d.sleep&&k===TODAY&&new Date().getHours()<14)?`<div class="card flat"><div class="row sb"><div><b>おはようございます</b><div class="small muted">いま起きた時刻で睡眠を記録します（就寝は前回と同じ）</div></div><button class="btn pri sm" data-act="wake">起きた</button></div></div>`:''}
+  ${!d.sleep?(()=>{const pv=Object.keys(S.days).filter(x=>x<k&&S.days[x].sleep).sort().pop(),rf=pv?S.days[pv].sleep:{bed:'23:30',wake:'07:00'};return `<div class="card flat"><b>睡眠を記録</b><div class="small muted" style="margin-bottom:10px">就寝と起床の時刻を入力します</div><div class="grid2"><label class="f">就寝<input type="time" id="hb" value="${rf.bed}"></label><label class="f">起床<input type="time" id="hw" value="${rf.wake}"></label></div><button class="btn pri block" style="margin-top:12px" data-act="wake">保存する</button></div>`})():''}
   <div class="card">
     <h2>今日のトレーニング</h2>
     ${wo?`<div class="row sb"><div><h3>${wo.n}</h3><div class="small muted">${wo.sub}</div></div><span class="tag ${sc.pp.done>=sc.pp.total&&sc.pp.total?'ok':''} num">${sc.pp.done}/${sc.pp.total}</span></div>
@@ -816,8 +816,8 @@ const A={
   aidel:a=>{ai.res.food.splice(+a,1);renderAI()},
   review:()=>aiReview(),
   wake:()=>{
-    const d=D(ui.date),prev=Object.keys(S.days).filter(x=>x<ui.date&&S.days[x].sleep).sort().pop();
-    const n=new Date();d.sleep={bed:prev?S.days[prev].sleep.bed:'23:30',wake:pad(n.getHours())+':'+pad(n.getMinutes()),q:3};save();render(true);
+    const d=D(ui.date);
+    d.sleep={bed:$('#hb').value||'23:30',wake:$('#hw').value||'07:00',q:3};save();render(true);
   },
   tab:a=>go(a),
   day:a=>{ui.date=a==='today'?TODAY:ymd(addDays(parse(ui.date),+a));ui.sess=null;if(ui.date>TODAY)ui.date=TODAY;render();},
