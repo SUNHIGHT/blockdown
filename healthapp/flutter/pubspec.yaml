@@ -1,0 +1,23 @@
+# Add these to the existing pubspec.yaml of your app (versions verified with Flutter 3.47 / Dart 3.13).
+name: health_app
+description: Meal, sleep and activity tracking with AI-assisted logging.
+publish_to: 'none'
+version: 0.1.0+1
+
+environment:
+  sdk: ^3.13.5
+
+dependencies:
+  flutter:
+    sdk: flutter
+  http: ^1.6.0                 # API client
+  health: ^13.3.2              # HealthKit (iOS) / Health Connect (Android)
+  permission_handler: ^13.0.2  # Android: ACTIVITY_RECOGNITION (needed for steps)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
